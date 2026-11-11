@@ -4,7 +4,12 @@ A single-page web app that connects to a Bluetti power station over **Web Blueto
 
 **Live page: https://boromisp.github.io/bluetti-ble-web/**
 
-This is a proof of concept.
+This is a proof of concept. Confirmed working on an **EL30V2** (encrypted handshake, status readout and AC/DC toggles).
+
+<p>
+  <img src="docs/monitor-connected.webp" width="270" alt="Connected to an EL30V2: encrypted handshake ready, 95% battery, AC and DC outputs on">
+  <img src="docs/pairing-dialog.webp" width="270" alt="Chrome's Bluetooth pairing dialog listing the power station">
+</p>
 
 ## Usage
 
