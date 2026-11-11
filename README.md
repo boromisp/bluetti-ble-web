@@ -2,11 +2,13 @@
 
 A single-page web app that connects to a Bluetti power station over **Web Bluetooth** (Chrome on Android or desktop) and shows its status: battery %, AC/DC input and output power, and AC/DC output on/off. It has a refresh button, AC/DC output toggles and a scrolling debug log of every raw frame.
 
-This is a proof of concept. It has only been tested against simulated devices, not real hardware.
+**Live page: https://boromisp.github.io/bluetti-ble-web/**
+
+This is a proof of concept.
 
 ## Usage
 
-Serve `index.html` from any HTTPS origin, such as GitHub Pages, and open it in Chrome. Web Bluetooth needs a secure context and doesn't work inside sandboxed iframes. `index.html` is self-contained, with no network requests at runtime.
+Open the [live page](https://boromisp.github.io/bluetti-ble-web/) in Chrome, or serve `index.html` from any other HTTPS origin. Web Bluetooth needs a secure context and doesn't work inside sandboxed iframes. `index.html` is self-contained, with no network requests at runtime.
 
 ## How it works
 
