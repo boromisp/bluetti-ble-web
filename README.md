@@ -35,6 +35,18 @@ npm run build   # rebuilds index.html from src/
 - `src/template.html`: the UI; `build.mjs` inlines the noble bundle and `proto.js` into it
 - `test/protocol.test.js`: runs a fake device built on Node's `crypto` (independent of noble and WebCrypto), in both plain and encrypted mode, with 20-byte notification fragments
 
+## Cloud-link decoder (`cloud/`)
+
+With Wi‑Fi on, the station also keeps a plain (unencrypted) MQTT 3.1.1 connection to Bluetti's IoT server on port 18760, publishing the same Modbus registers as over Bluetooth. `cloud/bluetti_cloud.py` decodes those publishes: the station's periodic register dumps, read responses and status text. The protocol is documented in the file's docstring. It uses only the Python standard library, and can decode a `tcpdump -w` capture:
+
+```sh
+python3 cloud/bluetti_cloud.py capture.pcap        # decoded EL30V2 values
+python3 cloud/bluetti_cloud.py --raw capture.pcap  # plus every register block
+python3 -m unittest discover cloud                 # tests (synthetic data)
+```
+
+Redirect the station's port-18760 traffic to your own MQTT broker, and the decoder can feed Home Assistant without Bluetti's cloud. The station's MQTT password changes on every connection, so the broker can't check it; restrict it by username with an ACL instead.
+
 ## Credits
 
 - Encryption handshake: [nhurman/bluetti_mqtt](https://github.com/nhurman/bluetti_mqtt) (`bluetti_mqtt/bluetooth/encryption.py`), MIT
