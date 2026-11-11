@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bluetti BLE Monitor</title>
+<style>
+  :root { --bg:#f6f6f4; --card:#fff; --fg:#1b1b1a; --mute:#6b6b66; --line:#e2e2dc; --acc:#1f6feb; --on:#1a7f37; --off:#9a9a94; --err:#c62828; --tx:#8250df; --rx:#0a7d6a; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141413; --card:#1e1e1c; --fg:#ecece8; --mute:#9b9b95; --line:#2f2f2c; --acc:#4c8dff; --on:#3fb950; --off:#6b6b66; --err:#ff6b6b; --tx:#c297ff; --rx:#4fd1b5; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width:560px; margin:0 auto; padding:14px; display:flex; flex-direction:column; gap:12px; }
+  h1 { font-size:18px; margin:4px 0 0; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  button { font:inherit; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--fg); min-height:44px; }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#fff; font-weight:600; }
+  button:disabled { opacity:.45; }
+  .grow { flex:1; }
+  .muted { color:var(--mute); font-size:13px; }
+  .notice { color:var(--err); font-size:13px; }
+  .meta { display:grid; grid-template-columns:auto 1fr; gap:2px 10px; font-size:13px; }
+  .meta b { font-weight:500; color:var(--mute); }
+  .soc { display:flex; align-items:baseline; gap:8px; }
+  .soc .v { font-size:40px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .bar { height:8px; border-radius:4px; background:var(--line); overflow:hidden; margin-top:6px; }
+  .bar > i { display:block; height:100%; width:0; background:var(--on); transition:width .3s; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:12px; }
+  .tile { border:1px solid var(--line); border-radius:10px; padding:8px 10px; }
+  .tile .k { font-size:12px; color:var(--mute); }
+  .tile .v { font-size:20px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .sw { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .sw span { white-space:nowrap; }
+  .sw button { min-width:88px; font-weight:600; }
+  .sw button.on { background:var(--on); border-color:var(--on); color:#fff; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:99px; font-size:12px; border:1px solid var(--line); }
+  #log { height:300px; overflow:auto; font:11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space:pre-wrap; word-break:break-all; background:var(--bg); border-radius:8px; padding:6px; margin-top:8px; }
+  #log .tx { color:var(--tx); } #log .rx { color:var(--rx); } #log .err { color:var(--err); } #log .st { color:var(--mute); }
+  label.chk { display:flex; align-items:center; gap:6px; font-size:13px; color:var(--mute); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Bluetti BLE Monitor <span class="muted">proof of concept</span></h1>
+
+  <div class="card">
+    <div class="row">
+      <button id="connect" class="primary grow">Connect</button>
+      <button id="disconnect" disabled>Disconnect</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label class="chk"><input type="checkbox" id="allDevices"> show all BLE devices</label>
+    </div>
+    <div id="notice" class="notice" style="margin-top:8px"></div>
+    <div class="meta" style="margin-top:8px">
+      <b>Device</b><span id="mDevice">–</span>
+      <b>Model</b><span id="mModel">–</span>
+      <b>Link</b><span id="mLink">disconnected</span>
+      <b>Handshake</b><span id="mHs">–</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="soc"><span class="v" id="soc">–</span><span class="muted">% battery</span></div>
+    <div class="bar"><i id="socBar"></i></div>
+    <div class="grid">
+      <div class="tile"><div class="k">AC input</div><div class="v" id="acIn">–</div></div>
+      <div class="tile"><div class="k">DC input</div><div class="v" id="dcIn">–</div></div>
+      <div class="tile"><div class="k">AC output</div><div class="v" id="acOut">–</div></div>
+      <div class="tile"><div class="k">DC output</div><div class="v" id="dcOut">–</div></div>
+    </div>
+    <div class="grid">
+      <div class="tile sw"><span>AC out</span><button id="acBtn" disabled>–</button></div>
+      <div class="tile sw"><span>DC out</span><button id="dcBtn" disabled>–</button></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button id="refresh" class="grow" disabled>Refresh</button>
+      <label class="chk"><input type="checkbox" id="auto"> auto 5 s</label>
+    </div>
+    <div class="muted" id="updated" style="margin-top:6px"></div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <strong class="grow">Debug log</strong>
+      <label class="chk"><input type="checkbox" id="follow" checked> follow</label>
+      <button id="copyLog">Copy</button>
+      <button id="clearLog">Clear</button>
+    </div>
+    <div id="log"></div>
+  </div>
+</main>
+
+<script>var Noble=(()=>{var k=Object.defineProperty;var lt=Object.getOwnPropertyDescriptor;var ht=Object.getOwnPropertyNames;var at=Object.prototype.hasOwnProperty;var pt=(t,e)=>{for(var n in e)k(t,n,{get:e[n],enumerable:!0})},gt=(t,e,n,r)=>{if(e&&typeof e=="object"||typeof e=="function")for(let o of ht(e))!at.call(t,o)&&o!==n&&k(t,o,{get:()=>e[o],enumerable:!(r=lt(e,o))||r.enumerable});return t};var dt=t=>gt(k({},"__esModule",{value:!0}),t);var Ht={};pt(Ht,{cbc:()=>Q,md5:()=>rt});function yt(t){return t instanceof Uint8Array||ArrayBuffer.isView(t)&&t.constructor.name==="Uint8Array"}function b(t,...e){if(!yt(t))throw new Error("Uint8Array expected");if(e.length>0&&!e.includes(t.length))throw new Error("Uint8Array expected of length "+e+", got length="+t.length)}function A(t){return new Uint32Array(t.buffer,t.byteOffset,Math.floor(t.byteLength/4))}function _(...t){for(let e=0;e<t.length;e++)t[e].fill(0)}var xt=new Uint8Array(new Uint32Array([287454020]).buffer)[0]===68;function X(t,e){return t.buffer===e.buffer&&t.byteOffset<e.byteOffset+e.byteLength&&e.byteOffset<t.byteOffset+t.byteLength}function M(t,e){if(X(t,e)&&t.byteOffset<e.byteOffset)throw new Error("complex overlap of input and output is not supported")}var Y=(t,e)=>{function n(r,...o){if(b(r),!xt)throw new Error("Non little-endian hardware is not yet supported");if(t.nonceLength!==void 0){let l=o[0];if(!l)throw new Error("nonce / iv required");t.varSizeNonce?b(l):b(l,t.nonceLength)}let i=t.tagLength;i&&o[1]!==void 0&&b(o[1]);let f=e(r,...o),c=(l,h)=>{if(h!==void 0){if(l!==2)throw new Error("cipher output not supported");b(h)}},s=!1;return{encrypt(l,h){if(s)throw new Error("cannot encrypt() twice with same key + nonce");return s=!0,b(l),c(f.encrypt.length,h),f.encrypt(l,h)},decrypt(l,h){if(b(l),i&&l.length<i)throw new Error("invalid ciphertext length: smaller than tagLength="+i);return c(f.decrypt.length,h),f.decrypt(l,h)}}}return Object.assign(n,t),n};function V(t,e,n=!0){if(e===void 0)return new Uint8Array(t);if(e.length!==t)throw new Error("invalid output length, expected "+t+", got: "+e.length);if(n&&!B(e))throw new Error("invalid output, must be aligned");return e}function B(t){return t.byteOffset%4===0}function C(t){return Uint8Array.from(t)}var E=16;var wt=283;function j(t){return t<<1^wt&-(t>>7)}function T(t,e){let n=0;for(;e>0;e>>=1)n^=t&-(e&1),t=j(t);return n}var D=(()=>{let t=new Uint8Array(256);for(let n=0,r=1;n<256;n++,r^=j(r))t[n]=r;let e=new Uint8Array(256);e[0]=99;for(let n=0;n<255;n++){let r=t[255-n];r|=r<<8,e[t[n]]=(r^r>>4^r>>5^r>>6^r>>7^99)&255}return _(t),e})(),bt=D.map((t,e)=>D.indexOf(e)),mt=t=>t<<24|t>>>8,N=t=>t<<8|t>>>24;function G(t,e){if(t.length!==256)throw new Error("Wrong sbox length");let n=new Uint32Array(256).map((u,l)=>e(t[l])),r=n.map(N),o=r.map(N),i=o.map(N),f=new Uint32Array(256*256),c=new Uint32Array(256*256),s=new Uint16Array(256*256);for(let u=0;u<256;u++)for(let l=0;l<256;l++){let h=u*256+l;f[h]=n[u]^r[l],c[h]=o[u]^i[l],s[h]=t[u]<<8|t[l]}return{sbox:t,sbox2:s,T0:n,T1:r,T2:o,T3:i,T01:f,T23:c}}var P=G(D,t=>T(t,3)<<24|t<<16|t<<8|T(t,2)),$=G(bt,t=>T(t,11)<<24|T(t,13)<<16|T(t,9)<<8|T(t,14)),At=(()=>{let t=new Uint8Array(16);for(let e=0,n=1;e<16;e++,n=j(n))t[e]=n;return t})();function J(t){b(t);let e=t.length;if(![16,24,32].includes(e))throw new Error("aes: invalid key size, should be 16, 24 or 32, got "+e);let{sbox2:n}=P,r=[];B(t)||r.push(t=C(t));let o=A(t),i=o.length,f=s=>m(n,s,s,s,s),c=new Uint32Array(e+28);c.set(o);for(let s=i;s<c.length;s++){let u=c[s-1];s%i===0?u=f(mt(u))^At[s/i-1]:i>6&&s%i===4&&(u=f(u)),c[s]=c[s-i]^u}return _(...r),c}function Ut(t){let e=J(t),n=e.slice(),r=e.length,{sbox2:o}=P,{T0:i,T1:f,T2:c,T3:s}=$;for(let u=0;u<r;u+=4)for(let l=0;l<4;l++)n[u+l]=e[r-u-4+l];_(e);for(let u=4;u<r-4;u++){let l=n[u],h=m(o,l,l,l,l);n[u]=i[h&255]^f[h>>>8&255]^c[h>>>16&255]^s[h>>>24]}return n}function U(t,e,n,r,o,i){return t[n<<8&65280|r>>>8&255]^e[o>>>8&65280|i>>>24&255]}function m(t,e,n,r,o){return t[e&255|n&65280]|t[r>>>16&255|o>>>16&65280]<<16}function Z(t,e,n,r,o){let{sbox2:i,T01:f,T23:c}=P,s=0;e^=t[s++],n^=t[s++],r^=t[s++],o^=t[s++];let u=t.length/4-2;for(let g=0;g<u;g++){let d=t[s++]^U(f,c,e,n,r,o),y=t[s++]^U(f,c,n,r,o,e),a=t[s++]^U(f,c,r,o,e,n),p=t[s++]^U(f,c,o,e,n,r);e=d,n=y,r=a,o=p}let l=t[s++]^m(i,e,n,r,o),h=t[s++]^m(i,n,r,o,e),w=t[s++]^m(i,r,o,e,n),x=t[s++]^m(i,o,e,n,r);return{s0:l,s1:h,s2:w,s3:x}}function Et(t,e,n,r,o){let{sbox2:i,T01:f,T23:c}=$,s=0;e^=t[s++],n^=t[s++],r^=t[s++],o^=t[s++];let u=t.length/4-2;for(let g=0;g<u;g++){let d=t[s++]^U(f,c,e,o,r,n),y=t[s++]^U(f,c,n,e,o,r),a=t[s++]^U(f,c,r,n,e,o),p=t[s++]^U(f,c,o,r,n,e);e=d,n=y,r=a,o=p}let l=t[s++]^m(i,e,o,r,n),h=t[s++]^m(i,n,e,o,r),w=t[s++]^m(i,r,n,e,o),x=t[s++]^m(i,o,r,n,e);return{s0:l,s1:h,s2:w,s3:x}}function Bt(t){if(b(t),t.length%E!==0)throw new Error("aes-(cbc/ecb).decrypt ciphertext should consist of blocks with size "+E)}function Lt(t,e,n){b(t);let r=t.length,o=r%E;if(!e&&o!==0)throw new Error("aec/(cbc-ecb): unpadded plaintext with disabled padding");B(t)||(t=C(t));let i=A(t);if(e){let c=E-o;c||(c=E),r=r+c}n=V(r,n),M(t,n);let f=A(n);return{b:i,o:f,out:n}}function _t(t,e){if(!e)return t;let n=t.length;if(!n)throw new Error("aes/pcks5: empty ciphertext not allowed");let r=t[n-1];if(r<=0||r>16)throw new Error("aes/pcks5: wrong padding");let o=t.subarray(0,-r);for(let i=0;i<r;i++)if(t[n-i-1]!==r)throw new Error("aes/pcks5: wrong padding");return o}function Ct(t){let e=new Uint8Array(16),n=A(e);e.set(t);let r=E-t.length;for(let o=E-r;o<E;o++)e[o]=r;return n}var Q=Y({blockSize:16,nonceLength:16},function(e,n,r={}){let o=!r.disablePadding;return{encrypt(i,f){let c=J(e),{b:s,o:u,out:l}=Lt(i,o,f),h=n,w=[c];B(h)||w.push(h=C(h));let x=A(h),g=x[0],d=x[1],y=x[2],a=x[3],p=0;for(;p+4<=s.length;)g^=s[p+0],d^=s[p+1],y^=s[p+2],a^=s[p+3],{s0:g,s1:d,s2:y,s3:a}=Z(c,g,d,y,a),u[p++]=g,u[p++]=d,u[p++]=y,u[p++]=a;if(o){let L=Ct(i.subarray(p*4));g^=L[0],d^=L[1],y^=L[2],a^=L[3],{s0:g,s1:d,s2:y,s3:a}=Z(c,g,d,y,a),u[p++]=g,u[p++]=d,u[p++]=y,u[p++]=a}return _(...w),l},decrypt(i,f){Bt(i);let c=Ut(e),s=n,u=[c];B(s)||u.push(s=C(s));let l=A(s);f=V(i.length,f),B(i)||u.push(i=C(i)),M(i,f);let h=A(i),w=A(f),x=l[0],g=l[1],d=l[2],y=l[3];for(let a=0;a+4<=h.length;){let p=x,L=g,ot=d,st=y;x=h[a+0],g=h[a+1],d=h[a+2],y=h[a+3];let{s0:it,s1:ct,s2:ft,s3:ut}=Et(c,x,g,d,y);w[a++]=it^p,w[a++]=ct^L,w[a++]=ft^ot,w[a++]=ut^st}return _(...u),_t(f,o)}}});function Tt(t){return t instanceof Uint8Array||ArrayBuffer.isView(t)&&t.constructor.name==="Uint8Array"}function v(t,...e){if(!Tt(t))throw new Error("Uint8Array expected");if(e.length>0&&!e.includes(t.length))throw new Error("Uint8Array expected of length "+e+", got length="+t.length)}function W(t,e=!0){if(t.destroyed)throw new Error("Hash instance has been destroyed");if(e&&t.finished)throw new Error("Hash#digest() has already been called")}function tt(t,e){v(t);let n=e.outputLen;if(t.length<n)throw new Error("digestInto() expects output buffer of length at least "+n)}function I(...t){for(let e=0;e<t.length;e++)t[e].fill(0)}function O(t){return new DataView(t.buffer,t.byteOffset,t.byteLength)}function et(t,e){return t<<e|t>>>32-e>>>0}function It(t){if(typeof t!="string")throw new Error("string expected");return new Uint8Array(new TextEncoder().encode(t))}function F(t){return typeof t=="string"&&(t=It(t)),v(t),t}var S=class{};function nt(t){let e=r=>t().update(F(r)).digest(),n=t();return e.outputLen=n.outputLen,e.blockLen=n.blockLen,e.create=()=>t(),e}function St(t,e,n,r){if(typeof t.setBigUint64=="function")return t.setBigUint64(e,n,r);let o=BigInt(32),i=BigInt(4294967295),f=Number(n>>o&i),c=Number(n&i),s=r?4:0,u=r?0:4;t.setUint32(e+s,f,r),t.setUint32(e+u,c,r)}function R(t,e,n){return t&e^~t&n}var K=class extends S{constructor(e,n,r,o){super(),this.finished=!1,this.length=0,this.pos=0,this.destroyed=!1,this.blockLen=e,this.outputLen=n,this.padOffset=r,this.isLE=o,this.buffer=new Uint8Array(e),this.view=O(this.buffer)}update(e){W(this),e=F(e),v(e);let{view:n,buffer:r,blockLen:o}=this,i=e.length;for(let f=0;f<i;){let c=Math.min(o-this.pos,i-f);if(c===o){let s=O(e);for(;o<=i-f;f+=o)this.process(s,f);continue}r.set(e.subarray(f,f+c),this.pos),this.pos+=c,f+=c,this.pos===o&&(this.process(n,0),this.pos=0)}return this.length+=e.length,this.roundClean(),this}digestInto(e){W(this),tt(e,this),this.finished=!0;let{buffer:n,view:r,blockLen:o,isLE:i}=this,{pos:f}=this;n[f++]=128,I(this.buffer.subarray(f)),this.padOffset>o-f&&(this.process(r,0),f=0);for(let h=f;h<o;h++)n[h]=0;St(r,o-8,BigInt(this.length*8),i),this.process(r,0);let c=O(e),s=this.outputLen;if(s%4)throw new Error("_sha2: outputLen should be aligned to 32bit");let u=s/4,l=this.get();if(u>l.length)throw new Error("_sha2: outputLen bigger than state");for(let h=0;h<u;h++)c.setUint32(4*h,l[h],i)}digest(){let{buffer:e,outputLen:n}=this;this.digestInto(e);let r=e.slice(0,n);return this.destroy(),r}_cloneInto(e){e||(e=new this.constructor),e.set(...this.get());let{blockLen:n,buffer:r,length:o,finished:i,destroyed:f,pos:c}=this;return e.destroyed=f,e.finished=i,e.length=o,e.pos=c,o%n&&e.buffer.set(r),e}clone(){return this._cloneInto()}};var vt=Uint32Array.from([1732584193,4023233417,2562383102,271733878,3285377520]);var Ot=Math.pow(2,32),Kt=Array.from({length:64},(t,e)=>Math.floor(Ot*Math.abs(Math.sin(e+1)))),H=vt.slice(0,4),z=new Uint32Array(16),q=class extends K{constructor(){super(64,16,8,!0),this.A=H[0]|0,this.B=H[1]|0,this.C=H[2]|0,this.D=H[3]|0}get(){let{A:e,B:n,C:r,D:o}=this;return[e,n,r,o]}set(e,n,r,o){this.A=e|0,this.B=n|0,this.C=r|0,this.D=o|0}process(e,n){for(let c=0;c<16;c++,n+=4)z[c]=e.getUint32(n,!0);let{A:r,B:o,C:i,D:f}=this;for(let c=0;c<64;c++){let s,u,l;c<16?(s=R(o,i,f),u=c,l=[7,12,17,22]):c<32?(s=R(f,o,i),u=(5*c+1)%16,l=[5,9,14,20]):c<48?(s=o^i^f,u=(3*c+5)%16,l=[4,11,16,23]):(s=i^(o|~f),u=7*c%16,l=[6,10,15,21]),s=s+r+Kt[c]+z[u],r=f,f=i,i=o,o=o+et(s,l[c%4])}r=r+this.A|0,o=o+this.B|0,i=i+this.C|0,f=f+this.D|0,this.set(r,o,i,f)}roundClean(){I(z)}destroy(){this.set(0,0,0,0),I(this.buffer)}},rt=nt(()=>new q);return dt(Ht);})();
+/*! Bundled license information:
+
+@noble/ciphers/esm/utils.js:
+  (*! noble-ciphers - MIT License (c) 2023 Paul Miller (paulmillr.com) *)
+
+@noble/hashes/esm/utils.js:
+  (*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
+*/</script>
+<script>/* Bluetti BLE protocol core: Modbus framing, encryption handshake, register maps.
+ * Ported from nhurman/bluetti_mqtt (encryption.py) and Patrick762/bluetti-bt-lib.
+ * Needs globalThis.crypto.subtle and a global `Noble` with { cbc, md5 }. */
+const BT = (() => {
+  'use strict';
+  const subtle = globalThis.crypto.subtle;
+
+  // ---------- byte helpers ----------
+  const hex = (u8) => Array.from(u8, (b) => b.toString(16).padStart(2, '0')).join('');
+  const fromHex = (s) => Uint8Array.from(s.match(/../g).map((h) => parseInt(h, 16)));
+  const concat = (...arrs) => {
+    const out = new Uint8Array(arrs.reduce((n, a) => n + a.length, 0));
+    let o = 0;
+    for (const a of arrs) { out.set(a, o); o += a.length; }
+    return out;
+  };
+  const eq = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+  const u16 = (n) => Uint8Array.of((n >> 8) & 0xff, n & 0xff);
+  const startsKex = (u8) => u8.length >= 2 && u8[0] === 0x2a && u8[1] === 0x2a;
+
+  // ---------- Modbus ----------
+  function crc16(buf) {
+    let crc = 0xffff;
+    for (const b of buf) {
+      crc ^= b;
+      for (let i = 0; i < 8; i++) crc = crc & 1 ? (crc >>> 1) ^ 0xa001 : crc >>> 1;
+    }
+    return crc;
+  }
+  function withCrc(body) {
+    const c = crc16(body);
+    return concat(body, Uint8Array.of(c & 0xff, c >> 8)); // CRC little-endian
+  }
+  const readCmd = (addr, qty) => withCrc(concat(Uint8Array.of(1, 3), u16(addr), u16(qty)));
+  const writeCmd = (addr, val) => withCrc(concat(Uint8Array.of(1, 6), u16(addr), u16(val)));
+  const crcOk = (f) => f.length >= 4 && crc16(f.subarray(0, -2)) === (f[f.length - 2] | (f[f.length - 1] << 8));
+
+  // Joins Modbus RTU frames that arrive split across notifications.
+  class ModbusAssembler {
+    constructor() { this.buf = new Uint8Array(0); }
+    reset() { this.buf = new Uint8Array(0); }
+    expected() {
+      const b = this.buf;
+      if (b.length < 3) return null;
+      if (b[1] & 0x80) return 5;               // exception: addr fn code crc crc
+      if (b[1] === 3 || b[1] === 4) return 5 + b[2]; // addr fn count data.. crc crc
+      if (b[1] === 6 || b[1] === 16) return 8;
+      return b.length;                         // unknown function: take what we have
+    }
+    push(chunk) {
+      this.buf = concat(this.buf, chunk);
+      const frames = [];
+      for (;;) {
+        const n = this.expected();
+        if (n == null || this.buf.length < n) break;
+        frames.push(this.buf.slice(0, n));
+        this.buf = this.buf.slice(n);
+      }
+      return frames;
+    }
+  }
+
+  // ---------- encryption constants (from encryption.py) ----------
+  const LOCAL_AES_KEY = fromHex('459FC535808941F17091E0993EE3E93D');
+  const PUBLIC_KEY_K2_SPKI = fromHex('3059301306072a8648ce3d020106082a8648ce3d03010703420004A73ABF5D2232C8C1C72E68304343C272495E3A8FD6F30EA96DE2F4B3CE60B251EE21AC667CF8A71E18B46B664EAEFFE3C489F24F695B6411DB7E22CCC85A8594');
+  // PRIVATE_KEY_L1 (4F19A16E…F337) as a JWK; x/y derived offline from d.
+  const PRIVATE_KEY_L1_JWK = { kty: 'EC', crv: 'P-256', d: 'Txmhbj6Hvdm9JNPlSVuIBBURlDy8i5aa3pZB0PVq8zc', x: 'PynhuLKdhCK7sODwkADPLuKTHaE82sgSn4wJ3qwH9Rk', y: 'taxVCco_P1myNLd3eiMa5ZXKWqF0X9emK8TQIDcRfdE', ext: true };
+
+  const sum16 = (body) => u16(body.reduce((s, b) => s + b, 0) & 0xffff);
+  const kexFrame = (body) => concat(Uint8Array.of(0x2a, 0x2a), body, sum16(body));
+  // "2a2a <type> <x> <data…> <cksum16>"
+  function parseKex(u8) {
+    const body = u8.subarray(2, -2);
+    return { type: body[0], data: body.subarray(2), checksumOk: eq(sum16(body), u8.subarray(-2)) };
+  }
+
+  function aesEncrypt(data, key, iv) {
+    let header = u16(data.length);
+    if (iv == null) {
+      const seed = globalThis.crypto.getRandomValues(new Uint8Array(4));
+      iv = Noble.md5(seed);
+      header = concat(header, seed);
+    }
+    const padded = new Uint8Array(Math.ceil(data.length / 16) * 16);
+    padded.set(data);
+    return concat(header, Noble.cbc(key, iv, { disablePadding: true }).encrypt(padded));
+  }
+  function aesDecrypt(data, key, iv) {
+    const len = (data[0] << 8) | data[1];
+    let enc;
+    if (iv == null) { iv = Noble.md5(data.subarray(2, 6)); enc = data.subarray(6); }
+    else enc = data.subarray(2);
+    if (enc.length % 16 !== 0) throw new Error('Data not aligned on AES block size');
+    return Noble.cbc(key, iv, { disablePadding: true }).decrypt(enc).slice(0, len);
+  }
+
+  // ---------- register maps (from bluetti-bt-lib devices/*.py) ----------
+  const DEVICE_NAME_RE = /^(AC2A|AC2P|AC50B|AC60|AC60P|AC70|AC70P|AC180|AC180T|AC180P|AC200L|AC200M|AC200PL|AC300|AC500|AP300|EB3A|EL10|EL100V2|EL30V2|EP500|EP500P|EP600|EP760|EP800|EP2000|Handsfree\s[12]|PR30V2|PR100V2)(\d+)$/;
+  // Minimal set of prefixes covering every name above, plus PBOX (scan script accepts it).
+  const NAME_PREFIXES = ['AC2A', 'AC2P', 'AC50B', 'AC60', 'AC70', 'AC180', 'AC200', 'AC300', 'AC500', 'AP300', 'EB3A', 'EL10', 'EL30', 'EP500', 'EP600', 'EP760', 'EP800', 'EP2000', 'Handsfree', 'PR30', 'PR100', 'PBOX'];
+
+  // Field kinds: 'u' UInt, 'b' BoolField (0/1 else null), 'nz' BoolFieldNonZero (==1)
+  const V1 = { v: 1, soc: 43, dcIn: 36, acIn: 37, acOut: 38, dcOut: 39 };
+  const V2 = { v: 2, soc: 102 };
+  const V2P = { ...V2, dcOut: 140, acOut: 142, dcIn: 144, acIn: 146 };
+  const V1C = { ...V1, acOn: [3007, 'b'], dcOn: [3008, 'b'], ctrlAc: 3007, ctrlDc: 3008 };
+  const V2C = { ...V2P, acOn: [2011, 'b'], dcOn: [2012, 'b'], ctrlAc: 2011, ctrlDc: 2012 };
+  const MODELS = {
+    AC200L: V1C, AC200M: V1C, AC200PL: V1C, AC300: V1C, AC500: V1C, EB3A: V1C, EP500: V1C, EP500P: V1C,
+    AC180: V2C, AC180P: V2C, AC60: V2C, AC60P: V2C, AC70: V2C, EL10: V2C, EL100V2: V2C, EL30V2: V2C, 'Handsfree 2': V2C,
+    AC180T: V2P, AC70P: V2P, AP300: V2P, 'Handsfree 1': V2P, PR100V2: V2P, PR30V2: V2P,
+    AC50B: { v: 2, soc: 102, dcOut: 140, acOut: 142, acIn: 146 },
+    AC2A: { ...V2P, acOn: [1509, 'b'], dcOn: [2012, 'b'] },
+    AC2P: { ...V2P, acOn: [2011, 'nz'], dcOn: [2012, 'nz'], ctrlAc: 2011, ctrlDc: 2012 },
+    EP600: { ...V2, acOn: [2011, 'b'], ctrlAc: 2011 },
+    EP760: { ...V2, acOn: [2208, 'b'], ctrlAc: 2208 },
+    EP2000: { ...V2, acOn: [2011, 'b'] },
+    EP800: { ...V2 },
+  };
+  const modelFromName = (name) => {
+    const m = name && DEVICE_NAME_RE.exec(name.trim());
+    return m ? m[1].replace(/\s+/, ' ') : null;
+  };
+
+  // Group the addresses we need into a few contiguous reads.
+  function pollRanges(model) {
+    const addrs = new Set();
+    for (const k of ['soc', 'dcIn', 'acIn', 'acOut', 'dcOut']) if (model[k] != null) addrs.add(model[k]);
+    for (const k of ['acOn', 'dcOn']) if (model[k]) addrs.add(model[k][0]);
+    const sorted = [...addrs].sort((a, b) => a - b);
+    const ranges = [];
+    for (const a of sorted) {
+      const r = ranges[ranges.length - 1];
+      if (r && a - (r.start + r.qty - 1) <= 8 && a - r.start < 32) r.qty = a - r.start + 1;
+      else ranges.push({ start: a, qty: 1 });
+    }
+    return ranges;
+  }
+
+  function parseStatus(model, words) { // words: Map addr -> uint16
+    const u = (a) => (a == null || !words.has(a) ? null : words.get(a));
+    const bool = (spec) => {
+      if (!spec) return null;
+      const v = u(spec[0]);
+      if (v == null) return null;
+      if (spec[1] === 'nz') return v === 1;
+      return v === 0 ? false : v === 1 ? true : null;
+    };
+    const soc = u(model.soc);
+    return {
+      soc: soc != null && soc <= 100 ? soc : null,
+      dcIn: u(model.dcIn), acIn: u(model.acIn), acOut: u(model.acOut), dcOut: u(model.dcOut),
+      acOn: bool(model.acOn), dcOn: bool(model.dcOn),
+    };
+  }
+
+  // ---------- connection session ----------
+  class Session {
+    /** opts: { write(u8): Promise, log(dir, label, u8|null, text?), onState(s), k2Spki?, timeoutMs? } */
+    constructor(opts) {
+      this.o = opts;
+      this.k2Spki = opts.k2Spki || PUBLIC_KEY_K2_SPKI;
+      this.timeoutMs = opts.timeoutMs || 5000;
+      this.mode = 'detect';           // detect | plain | encrypted
+      this.hs = 'waiting';            // handshake state for display
+      this.modbus = new ModbusAssembler();
+      this.encBuf = new Uint8Array(0);
+      this.unsecureKey = this.unsecureIv = this.secureKey = null;
+      this.pending = null;
+      this.chain = Promise.resolve();
+      this.queue = Promise.resolve(); // serialises notification handling (crypto is async)
+      this._firstNotify = null;
+      this._ready = null;
+    }
+    log(...a) { this.o.log(...a); }
+    setHs(s, extra) { this.hs = s; this.log('st', 'handshake: ' + s + (extra ? ' – ' + extra : '')); this.o.onState && this.o.onState(this); }
+
+    async raw(u8, label) { this.log('tx', label || 'TX', u8); await this.o.write(u8); }
+
+    onNotify(u8) {
+      u8 = new Uint8Array(u8);
+      this.log('rx', 'RX', u8);
+      this.queue = this.queue.then(() => this._handle(u8)).catch((e) => this.log('err', 'notify handler: ' + e.message));
+    }
+
+    async _handle(u8) {
+      if (this._firstNotify) { const r = this._firstNotify; this._firstNotify = null; r(u8); }
+      if (this.mode === 'detect') {
+        this.mode = startsKex(u8) ? 'encrypted' : 'plain';
+        this.log('st', 'mode: ' + this.mode + ' (first notification ' + (startsKex(u8) ? 'starts with 2a2a' : 'is not 2a2a') + ')');
+      } else if (this.mode === 'plain' && startsKex(u8) && this.modbus.buf.length === 0 && u8[2] === 1) {
+        this.mode = 'encrypted';
+        this.log('st', 'mode: switched to encrypted (late challenge)');
+      }
+      if (this.mode === 'plain') return this._modbusIn(u8);
+      return this._encryptedIn(u8);
+    }
+
+    async _encryptedIn(u8) {
+      if (this.encBuf.length === 0 && startsKex(u8)) return this._kex(parseKex(u8));
+      if (!this.unsecureKey) { this.log('err', 'encrypted data before key initialisation'); return; }
+      this.encBuf = concat(this.encBuf, u8);
+      for (;;) {
+        if (this.encBuf.length < 2) return;
+        const len = (this.encBuf[0] << 8) | this.encBuf[1];
+        const header = this.secureKey ? 6 : 2;
+        const need = header + Math.ceil(len / 16) * 16;
+        if (this.encBuf.length < need) { this.log('st', `buffering encrypted fragment ${this.encBuf.length}/${need}`); return; }
+        const msg = this.encBuf.slice(0, need);
+        this.encBuf = this.encBuf.slice(need);
+        let plain;
+        try {
+          plain = this.secureKey ? aesDecrypt(msg, this.secureKey, null) : aesDecrypt(msg, this.unsecureKey, this.unsecureIv);
+        } catch (e) { this.log('err', 'decrypt failed: ' + e.message); this.encBuf = new Uint8Array(0); return; }
+        this.log('rx', 'RX plain', plain);
+        if (startsKex(plain)) await this._kex(parseKex(plain));
+        else this._modbusIn(plain);
+      }
+    }
+
+    async _kex(m) {
+      if (!m.checksumOk) this.log('err', 'kex checksum mismatch (continuing, as bluetti-bt-lib does)');
+      try {
+        if (m.type === 1) {                      // CHALLENGE
+          if (m.data.length !== 4) throw new Error('challenge length ' + m.data.length);
+          this.unsecureIv = Noble.md5(m.data.slice().reverse());
+          this.unsecureKey = this.unsecureIv.map((b, i) => b ^ LOCAL_AES_KEY[i]);
+          this.setHs('challenge received', 'iv ' + hex(this.unsecureIv) + ' key ' + hex(this.unsecureKey));
+          await this.raw(kexFrame(concat(Uint8Array.of(2, 4), this.unsecureIv.subarray(8, 12))), 'TX challenge resp');
+          this.setHs('challenge answered');
+        } else if (m.type === 3) {               // CHALLENGE_ACCEPTED
+          if (m.data.length !== 1 || m.data[0] !== 0) throw new Error('challenge rejected: ' + hex(m.data));
+          this.setHs('challenge accepted');
+        } else if (m.type === 4) {               // PEER_PUBKEY (signed)
+          if (m.data.length !== 128) throw new Error('peer pubkey length ' + m.data.length);
+          const peerPub = m.data.slice(0, 64), sig = m.data.slice(64);
+          const k2 = await subtle.importKey('spki', this.k2Spki, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+          const ok = await subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, k2, sig, concat(peerPub, this.unsecureIv));
+          if (!ok) throw new Error('peer pubkey signature invalid');
+          this.peerKey = await subtle.importKey('raw', concat(Uint8Array.of(4), peerPub), { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+          this.setHs('peer pubkey verified');
+          const kp = await subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+          this.myPriv = kp.privateKey;
+          const myPub = new Uint8Array(await subtle.exportKey('raw', kp.publicKey)).slice(1);
+          const l1 = await subtle.importKey('jwk', PRIVATE_KEY_L1_JWK, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+          const mySig = new Uint8Array(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, l1, concat(myPub, this.unsecureIv)));
+          const msg = kexFrame(concat(Uint8Array.of(5, 0x80), myPub, mySig));
+          this.log('tx', 'TX plain', msg);
+          await this.raw(aesEncrypt(msg, this.unsecureKey, this.unsecureIv), 'TX our pubkey');
+          this.setHs('our pubkey sent');
+        } else if (m.type === 6) {               // PUBKEY_ACCEPTED
+          if (m.data.length !== 1 || m.data[0] !== 0) throw new Error('key rejected: ' + hex(m.data));
+          this.secureKey = new Uint8Array(await subtle.deriveBits({ name: 'ECDH', public: this.peerKey }, this.myPriv, 256));
+          this.setHs('ready', 'secure key ' + hex(this.secureKey));
+          if (this._ready) this._ready.resolve();
+        } else {
+          this.log('err', 'unknown kex message type ' + m.type);
+        }
+      } catch (e) {
+        this.hsError = e;
+        this.setHs('failed', e.message);
+        if (this._ready) this._ready.reject(e);
+      }
+    }
+
+    _modbusIn(u8) {
+      for (const f of this.modbus.push(u8)) {
+        if (f.length !== u8.length) this.log('rx', 'RX joined frame', f);
+        if (!this.pending) { this.log('st', 'unsolicited frame ' + hex(f)); continue; }
+        const p = this.pending; this.pending = null; clearTimeout(p.timer);
+        if (!crcOk(f)) p.reject(new Error('CRC error in ' + hex(f)));
+        else if (f[1] & 0x80) p.reject(new Error('Modbus exception code ' + f[2]));
+        else p.resolve(f);
+      }
+    }
+
+    /** After notifications are started: decide plain vs encrypted and finish the handshake. */
+    async start(detectMs = 3000, handshakeMs = 20000) {
+      const first = new Promise((r) => { this._firstNotify = r; });
+      const got = await Promise.race([first, new Promise((r) => setTimeout(() => r(null), detectMs))]);
+      if (!got) {
+        this._firstNotify = null;
+        if (this.mode === 'detect') { this.mode = 'plain'; this.log('st', `mode: plain (no notification within ${detectMs} ms)`); }
+      }
+      await this.queue;
+      if (this.mode === 'plain') { this.hs = 'n/a (plain)'; this.o.onState && this.o.onState(this); return; }
+      if (this.secureKey) return;
+      if (this.hsError) throw this.hsError;
+      await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('handshake timeout (state: ' + this.hs + ')')), handshakeMs);
+        this._ready = { resolve: () => { clearTimeout(t); resolve(); }, reject: (e) => { clearTimeout(t); reject(e); } };
+      });
+    }
+
+    /** Send one Modbus command, wait for the joined response frame. Serialised. */
+    request(cmd) {
+      const run = async () => {
+        if (this.mode === 'encrypted' && !this.secureKey) throw new Error('encryption handshake not finished');
+        this.modbus.reset();
+        this.encBuf = new Uint8Array(0);
+        const resp = new Promise((resolve, reject) => {
+          this.pending = { resolve, reject, timer: setTimeout(() => { this.pending = null; reject(new Error('response timeout')); }, this.timeoutMs) };
+        });
+        resp.catch(() => {});
+        if (this.mode === 'encrypted') {
+          this.log('tx', 'TX plain', cmd);
+          await this.raw(aesEncrypt(cmd, this.secureKey, null));
+        } else await this.raw(cmd);
+        return resp;
+      };
+      const p = this.chain.then(run, run);
+      this.chain = p.catch(() => {});
+      return p;
+    }
+
+    async readRegs(start, qty) {
+      const f = await this.request(readCmd(start, qty));
+      const data = f.subarray(3, -2);
+      if (data.length !== qty * 2) throw new Error(`expected ${qty * 2} data bytes, got ${data.length}`);
+      return data;
+    }
+    async writeReg(addr, val) {
+      const cmd = writeCmd(addr, val);
+      const f = await this.request(cmd);
+      if (!eq(f, cmd)) this.log('st', 'write echo differs: ' + hex(f));
+      return f;
+    }
+  }
+
+  // Device type strings: V2 at 110 (byte-swapped), V1 at 10 (plain), 6 registers each.
+  function decodeType(data, swap) {
+    const b = data.slice();
+    if (swap) for (let i = 0; i + 1 < b.length; i += 2) [b[i], b[i + 1]] = [b[i + 1], b[i]];
+    let end = b.length; while (end > 0 && b[end - 1] === 0) end--;
+    return Array.from(b.subarray(0, end), (c) => (c < 128 ? String.fromCharCode(c) : '')).join('');
+  }
+
+  return { hex, fromHex, concat, crc16, readCmd, writeCmd, ModbusAssembler, aesEncrypt, aesDecrypt, kexFrame, parseKex,
+    LOCAL_AES_KEY, PRIVATE_KEY_L1_JWK, DEVICE_NAME_RE, NAME_PREFIXES, MODELS, modelFromName, pollRanges, parseStatus,
+    decodeType, Session };
+})();
+if (typeof module !== 'undefined') module.exports = BT;
+</script>
+<script>
+(() => {
+  'use strict';
+  const SERVICE = 0xff00;
+  const NOTIFY_UUID = '0000ff01-0000-1000-8000-00805f9b34fb';
+  const WRITE_UUID = '0000ff02-0000-1000-8000-00805f9b34fb';
+  const $ = (id) => document.getElementById(id);
+
+  // ---------- log ----------
+  const logEl = $('log'), logLines = [];
+  function log(dir, label, u8, extra) {
+    const t = new Date().toISOString().slice(11, 23);
+    const arrow = dir === 'tx' ? '→' : dir === 'rx' ? '←' : '·';
+    const text = `${t} ${arrow} ${label}${u8 ? ` [${u8.length}] ${BT.hex(u8)}` : ''}${extra ? ' ' + extra : ''}`;
+    logLines.push(text);
+    const div = document.createElement('div');
+    div.className = dir; div.textContent = text;
+    logEl.appendChild(div);
+    while (logEl.childNodes.length > 1500) { logEl.removeChild(logEl.firstChild); logLines.shift(); }
+    if ($('follow').checked) logEl.scrollTop = logEl.scrollHeight;
+  }
+  $('clearLog').onclick = () => { logEl.textContent = ''; logLines.length = 0; };
+  $('copyLog').onclick = async () => {
+    try { await navigator.clipboard.writeText(logLines.join('\n')); $('copyLog').textContent = 'Copied'; }
+    catch { $('copyLog').textContent = 'Copy failed'; }
+    setTimeout(() => ($('copyLog').textContent = 'Copy'), 1500);
+  };
+
+  // ---------- environment checks ----------
+  function envProblem() {
+    if (!window.isSecureContext) return 'This page is not a secure context (HTTPS needed for Web Bluetooth).';
+    if (!navigator.bluetooth) return 'Web Bluetooth is not available in this browser. Use Chrome on Android (or desktop Chrome).';
+    try {
+      const fp = document.permissionsPolicy || document.featurePolicy;
+      if (window.self !== window.top && fp && fp.allowsFeature && !fp.allowsFeature('bluetooth'))
+        return 'This page is embedded in a frame that does not allow Bluetooth. Open it in its own Chrome tab (open the artifact link directly) and try again.';
+    } catch {}
+    return '';
+  }
+  const prob = envProblem();
+  if (prob) { $('notice').textContent = prob; log('err', prob); }
+  else log('st', 'Web Bluetooth available');
+
+  // ---------- state ----------
+  let device = null, writeChar = null, notifyChar = null, session = null, model = null, status = null, busy = false, timer = null;
+  let gattChain = Promise.resolve();
+  const gattWrite = (u8) => { // serialise GATT writes; always with response
+    const p = gattChain.then(() => writeChar.writeValueWithResponse(u8));
+    gattChain = p.catch(() => {});
+    return p;
+  };
+
+  function setLink(s) { $('mLink').textContent = s; }
+  function renderHs() { $('mHs').innerHTML = session ? `<span class="pill">${session.mode}</span> ${session.hs}` : '–'; }
+  const watts = (v) => (v == null ? 'n/a' : v + ' W');
+  function renderStatus() {
+    const s = status || {};
+    $('soc').textContent = s.soc ?? '–';
+    $('socBar').style.width = (s.soc ?? 0) + '%';
+    for (const k of ['acIn', 'dcIn', 'acOut', 'dcOut']) $(k).textContent = status ? watts(s[k]) : '–';
+    for (const [btn, on, ctrl] of [['acBtn', s.acOn, model && model.ctrlAc], ['dcBtn', s.dcOn, model && model.ctrlDc]]) {
+      const b = $(btn);
+      b.textContent = on == null ? (status ? 'n/a' : '–') : on ? 'ON' : 'OFF';
+      b.className = on ? 'on' : '';
+      b.disabled = !session || busy || ctrl == null || on == null;
+      b.title = ctrl == null ? 'No writable register for this model in bluetti-bt-lib' : '';
+    }
+    $('refresh').disabled = !session || busy;
+  }
+  function setConnected(c) {
+    $('connect').disabled = c; $('disconnect').disabled = !c;
+    if (!c) { session = null; model = null; status = null; stopAuto(); renderHs(); }
+    renderStatus();
+  }
+
+  // ---------- connect ----------
+  $('connect').onclick = async () => {
+    $('notice').textContent = '';
+    if (!navigator.bluetooth) { $('notice').textContent = envProblem(); return; }
+    try {
+      const opts = $('allDevices').checked
+        ? { acceptAllDevices: true, optionalServices: [SERVICE] }
+        : { filters: BT.NAME_PREFIXES.map((namePrefix) => ({ namePrefix })), optionalServices: [SERVICE] };
+      log('st', 'requestDevice ' + ($('allDevices').checked ? '(all devices)' : 'prefixes: ' + BT.NAME_PREFIXES.join(',')));
+      device = await navigator.bluetooth.requestDevice(opts);
+    } catch (e) { log('err', 'requestDevice: ' + e.message); if (e.name !== 'NotFoundError') $('notice').textContent = e.message; return; }
+
+    $('mDevice').textContent = device.name || device.id;
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    $('connect').disabled = true;
+    try {
+      setLink('connecting…'); log('st', 'GATT connect to ' + (device.name || device.id));
+      const server = await device.gatt.connect();
+      const svc = await server.getPrimaryService(SERVICE);
+      notifyChar = await svc.getCharacteristic(NOTIFY_UUID);
+      writeChar = await svc.getCharacteristic(WRITE_UUID);
+      session = new BT.Session({ write: gattWrite, log, onState: renderHs });
+      notifyChar.addEventListener('characteristicvaluechanged', (ev) => {
+        const dv = ev.target.value;
+        if (session) session.onNotify(new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength));
+      });
+      await notifyChar.startNotifications();
+      setLink('connected'); log('st', 'notifications started on ff01; waiting for first notification');
+      setConnected(true); renderHs();
+      await session.start(3000, 20000);
+      renderHs();
+      await detectModel();
+      await refresh();
+    } catch (e) {
+      log('err', 'connect: ' + e.message); $('notice').textContent = e.message;
+      if (device && device.gatt.connected) device.gatt.disconnect(); else setConnected(false);
+    }
+  };
+
+  $('disconnect').onclick = () => { if (device && device.gatt.connected) device.gatt.disconnect(); else onDisconnected(); };
+  function onDisconnected() { log('st', 'disconnected'); setLink('disconnected'); setConnected(false); }
+
+  // ---------- model detection ----------
+  async function tryType(addr, swap) {
+    try {
+      const t = BT.decodeType(await session.readRegs(addr, 6), swap);
+      log('st', `type register ${addr}: "${t}"`);
+      return t && BT.DEVICE_NAME_RE.test(t + '12345678') ? BT.modelFromName(t + '12345678') : null;
+    } catch (e) { log('st', `type register ${addr}: ${e.message}`); return null; }
+  }
+  async function detectModel() {
+    let name = await tryType(110, true), src = 'register 110 (IoT v2)';
+    if (!name) { name = await tryType(10, false); src = 'register 10 (IoT v1)'; }
+    if (!name) { name = BT.modelFromName(device.name); src = 'BLE name'; }
+    model = name && BT.MODELS[name];
+    if (!model) { $('mModel').textContent = 'unknown'; throw new Error('Could not detect a supported model'); }
+    $('mModel').textContent = `${name} · IoT v${model.v} · via ${src}`;
+    log('st', `model ${name} (v${model.v}) via ${src}; poll ranges ${JSON.stringify(BT.pollRanges(model))}`);
+  }
+
+  // ---------- refresh / control ----------
+  async function refresh() {
+    if (!session || !model || busy) return;
+    busy = true; renderStatus();
+    try {
+      const words = new Map();
+      for (const r of BT.pollRanges(model)) {
+        const d = await session.readRegs(r.start, r.qty);
+        for (let i = 0; i < r.qty; i++) words.set(r.start + i, (d[2 * i] << 8) | d[2 * i + 1]);
+      }
+      status = BT.parseStatus(model, words);
+      log('st', 'status ' + JSON.stringify(status));
+      $('updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    } catch (e) { log('err', 'refresh: ' + e.message); $('updated').textContent = 'Refresh failed: ' + e.message; }
+    finally { busy = false; renderStatus(); }
+  }
+  $('refresh').onclick = refresh;
+
+  async function toggle(which) {
+    const addr = which === 'ac' ? model.ctrlAc : model.ctrlDc;
+    const cur = which === 'ac' ? status.acOn : status.dcOn;
+    if (addr == null || cur == null || busy) return;
+    busy = true; renderStatus();
+    try {
+      log('st', `set ${which.toUpperCase()} output ${cur ? 'OFF' : 'ON'} (register ${addr} = ${cur ? 0 : 1})`);
+      await session.writeReg(addr, cur ? 0 : 1);
+    } catch (e) { log('err', 'write: ' + e.message); $('updated').textContent = 'Write failed: ' + e.message; }
+    finally { busy = false; }
+    await new Promise((r) => setTimeout(r, 500));
+    await refresh();
+  }
+  $('acBtn').onclick = () => toggle('ac');
+  $('dcBtn').onclick = () => toggle('dc');
+
+  function stopAuto() { clearInterval(timer); timer = null; $('auto').checked = false; }
+  $('auto').onchange = () => { clearInterval(timer); timer = $('auto').checked ? setInterval(refresh, 5000) : null; };
+
+  renderStatus();
+})();
+</script>
+</body>
+</html>
